@@ -41,6 +41,7 @@ from gateway.platforms.event import MessageEvent, MessageType
 from gateway.platforms.tcp_site import start_tcp_site
 from gateway.platforms.webhook_coalesce import WebhookCoalescer, validate_coalesce_config
 from gateway.platforms.webhook_filters import DEFAULT_SCRIPT_TIMEOUT_SECONDS, WebhookRouteProcessor
+from gateway.platforms.webhook_plugin_hook import dispatch_plugin_hook, validate_plugin_hook
 from gateway.response_filters import is_autonomous_silence_response
 
 logger = logging.getLogger(__name__)
@@ -265,6 +266,7 @@ class WebhookAdapter(BasePlatformAdapter):
                 raise ValueError(f"[webhook] Route '{name}' sets both deliver_only and cron_job. They are mutually "
                                  f"exclusive: deliver_only pushes the rendered template as a message, cron_job fires "
                                  f"an existing cron job (which handles its own delivery).")
+        validate_plugin_hook(name, route)
         validate_coalesce_config(name, route)
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
@@ -421,6 +423,7 @@ class WebhookAdapter(BasePlatformAdapter):
             return False
         try:
             # Hot-reloaded from the request handler: a malformed block must skip the route, not 500 the request.
+            validate_plugin_hook(name, route)
             validate_coalesce_config(name, route)
         except ValueError as e:
             logger.warning("[webhook] Dynamic route '%s' skipped: %s", name, e)
@@ -679,6 +682,19 @@ class WebhookAdapter(BasePlatformAdapter):
         if not self._route_processor.route_filters_match(route_config, payload, event_type, request.headers):
             logger.info("[webhook] filtered event=%s route=%s", event_type, route_name)
             return web.json_response({"status": "ignored", "reason": "filter", "route": route_name})
+        if "plugin_hook" in route_config:
+            id_headers = ("webhook-id", "svix-id", "X-GitHub-Delivery", "X-Request-ID")
+            if any(headers.get(key) for key in ("svix-id", "svix-timestamp", "svix-signature")):
+                id_headers = ("svix-id",)
+            elif headers.get("webhook-signature"):
+                id_headers = ("webhook-id",)
+            delivery_id = next((headers[key] for key in id_headers if headers.get(key, "").strip()), "")
+            if not delivery_id:
+                return _json_error("Plugin webhook requires a stable delivery ID header", 400)
+            with self._profile_scope(profile or "default"):
+                return await dispatch_plugin_hook(route_config["plugin_hook"], route_name=route_name,
+                                                  profile=profile or "default", payload=payload,
+                                                  delivery_id=delivery_id)
         # Script, prompt render and skill lookup read the profile's home (skills/, config); the runner
         # only enters the routed profile's scope later around handle_message, so enter it here.
         # See #67277.

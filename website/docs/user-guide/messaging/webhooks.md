@@ -81,6 +81,7 @@ Routes define how different webhook sources are handled. Each route is a named e
 | `events` | No | List of event types to accept (e.g. `["pull_request"]`). If empty, all events are accepted. Event type is read from `X-GitHub-Event`, `X-GitLab-Event`, or `event_type` in the payload. |
 | `secret` | **Yes** | HMAC secret for signature validation. Falls back to the global `secret` if not set on the route. Set to `"INSECURE_NO_AUTH"` for testing only (skips validation). |
 | `profile` | No | Profile authorized to execute this route when `gateway.multiplex_profiles` is enabled. Omit it for a default-profile-only route; set a profile name (for example `coder`) to bind the route and its secret to `/p/coder/webhooks/<route>`. Dynamic subscriptions set it with `hermes webhook subscribe <name> --route-profile coder`. |
+| `plugin_hook` | No | Deterministic async plugin callback returning the HTTP acknowledgement. See [Plugin acknowledgement mode](#plugin-acknowledgement-mode). |
 | `prompt` | No | Template string with dot-notation payload access (e.g. `{pull_request.title}`). If omitted, the full JSON payload is dumped into the prompt. Payload fields are untrusted — see [Authenticated does not mean trusted](#authenticated-does-not-mean-trusted). |
 | `filters` | No | Declarative payload filters evaluated after auth/body/event filtering and before agent or direct delivery work. Non-matches return `{"status":"ignored","reason":"filter"}` with HTTP 200. |
 | `script` | No | Filter/transform script under `~/.hermes/scripts/`. The webhook payload is passed as JSON on stdin. JSON object stdout replaces the payload before templating; text stdout is exposed as `script_output`; empty stdout, `[SILENT]`, or a nonzero exit code ignores the webhook. |
@@ -92,6 +93,46 @@ Routes define how different webhook sources are handled. Each route is a named e
 | `cron_job` | No | Fire an existing cron job (by ID or name) on each event instead of starting a fresh webhook agent session. The rendered `prompt` becomes transient per-run context; the job's own prompt, skills, model, and delivery settings apply. Mutually exclusive with `deliver_only`. See [Event-Triggered Cron Jobs](#event-triggered-cron-jobs). |
 | `coalesce` | No | Debounce rapid distinct events on the same logical entity into one agent run. Block with a required `key` (payload field or template identifying the entity, e.g. `pull_request.number`), optional `window_seconds` (quiet window, default 30) and `max_wait_seconds` (dispatch cap, default 300). See [Event Coalescing](#event-coalescing). Mutually exclusive with `deliver_only` and `cron_job`. |
 | `mirror_to_session` | No | Default `false`. When `true`, after a successful delivery to a chat platform the delivered message is also written into that chat's session transcript (as a labelled user turn, the same way continuable cron briefs are), so when you reply in that chat the agent knows what it just sent you. See [Replying to a delivery](#replying-to-a-delivery). |
+
+### Plugin acknowledgement mode
+
+A route can hand authenticated events directly to an installed plugin:
+
+```yaml
+routes:
+  receipts:
+    secret: "your-webhook-secret"
+    plugin_hook: "receipt_ingress"
+    profile: "default"
+```
+
+The owning profile's plugin registers exactly one `async def` callback with
+`ctx.register_hook("receipt_ingress", callback)`. It receives keyword arguments
+`route_name`, `profile` (including the canonical `"default"`), `payload`, and
+`delivery_id`. It returns `{"status": 200, "body": {"receipt": "stored"}}`:
+`status` must be an integer HTTP code from 200 through 599, and `body` a JSON
+object containing only finite JSON values, string keys, at most 32 levels of
+nesting, and at most 64 KiB encoded as UTF-8.
+
+Authentication, body limits, rate limits, event selection, and declarative filters
+run first. Then the callback runs in the owning profile's scope, without rendering
+a prompt or invoking an agent. Callback lookup lazily loads that profile's plugins.
+Missing or multiple handlers, synchronous callbacks, exceptions, invalid responses,
+and the 10-second timeout return HTTP 503 so the sender can retry. Async callbacks
+must use nonblocking I/O and cooperate with cancellation; synchronous functions
+are rejected rather than moved into an unkillable thread.
+
+Every request must include a stable provider delivery header: `webhook-id`,
+`svix-id`, `X-GitHub-Delivery`, or `X-Request-ID`; missing IDs return HTTP 400.
+For Standard Webhooks, the existing signature binds the timestamp, delivery ID,
+and raw body. Hermes does not deduplicate plugin calls: a retry invokes the
+callback again. The plugin owns durable idempotency and must commit its receipt
+before returning a success acknowledgement.
+
+`plugin_hook` must be a nonblank string. It cannot be combined with `prompt`,
+`script`, `cron_job`, `deliver`, `deliver_only`, `coalesce`, `skills`, `toolsets`,
+`deliver_extra`, or `mirror_to_session`, even when those fields are empty or false.
+These checks apply to configured routes at startup and to dynamic subscriptions.
 
 ### Full example
 
