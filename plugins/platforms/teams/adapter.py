@@ -533,6 +533,7 @@ class TeamsAdapter(BasePlatformAdapter):
         msg_type = next((t for kind, t in _MEDIA_KIND_PRECEDENCE if kind in media_kinds), MessageType.TEXT)
         await self.handle_message(MessageEvent(
             text=text, source=source, message_type=msg_type, message_id=msg_id,
+            reply_to_message_id=getattr(activity, "reply_to_id", None),
             media_urls=[path for path, _, _ in media], media_types=[mt for _, mt, _ in media]))
 
     @staticmethod
