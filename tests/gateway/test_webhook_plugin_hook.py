@@ -146,3 +146,36 @@ def test_plugin_hook_requires_a_name(name):
     with pytest.raises(ValueError, match="plugin_hook"):
         adapter._validate_route("receipt", adapter._routes["receipt"])
     assert not adapter._dynamic_route_allowed("receipt", adapter._routes["receipt"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prefix", ["", "/p/coder"])
+async def test_standalone_named_profile_matches_plugin_context(monkeypatch, tmp_path, prefix):
+    from hermes_cli import plugins
+    from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
+    from hermes_constants import get_hermes_home
+
+    owner_home = tmp_path / ".hermes" / "profiles" / "coder"
+    owner_home.mkdir(parents=True)
+    (owner_home / "config.yaml").write_text("{}")
+    monkeypatch.setenv("HERMES_HOME", str(owner_home))
+    manager = PluginManager()
+    context = PluginContext(PluginManifest(name="receipt-proof"), manager)
+    received = []
+
+    async def callback(**kwargs):
+        received.append((kwargs["profile"], context.profile_name, get_hermes_home()))
+        if kwargs["profile"] != context.profile_name:
+            return {"status": 403, "body": {"error": "wrong profile"}}
+        return {"status": 200, "body": {"receipt": "persisted"}}
+
+    context.register_hook("receipt_ingress", callback)
+    monkeypatch.setattr(plugins, "_delivery_manager", lambda: manager)
+    adapter = _adapter()
+    adapter.gateway_runner = MagicMock(config=MagicMock(multiplex_profiles=False))
+    body = b'{"type":"receipt"}'
+    async with TestClient(TestServer(_app(adapter))) as client:
+        response = await client.post(prefix + "/webhooks/receipt", data=body, headers=_headers(body))
+        assert response.status == 200
+        assert await response.json() == {"receipt": "persisted"}
+    assert received == [("coder", "coder", owner_home)]

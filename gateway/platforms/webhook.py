@@ -693,7 +693,7 @@ class WebhookAdapter(BasePlatformAdapter):
                 return _json_error("Plugin webhook requires a stable delivery ID header", 400)
             with self._profile_scope(profile):
                 return await dispatch_plugin_hook(route_config["plugin_hook"], route_name=route_name,
-                                                  profile=profile or "default", payload=payload,
+                                                  profile=profile, payload=payload,
                                                   delivery_id=delivery_id)
         # Script, prompt render and skill lookup read the profile's home (skills/, config); the runner
         # only enters the routed profile's scope later around handle_message, so enter it here.

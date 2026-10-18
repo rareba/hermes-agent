@@ -108,8 +108,9 @@ routes:
 
 The owning profile's plugin registers exactly one `async def` callback with
 `ctx.register_hook("receipt_ingress", callback)`. It receives keyword arguments
-`route_name`, `profile` (including the canonical `"default"`), `payload`, and
-`delivery_id`. It returns `{"status": 200, "body": {"receipt": "stored"}}`:
+`route_name`, `profile` (the owning profile, including canonical `"default"`), `payload`, and
+`delivery_id`. Bare routes in a standalone named-profile gateway report that
+profile, matching `PluginContext.profile_name`. It returns `{"status": 200, "body": {"receipt": "stored"}}`:
 `status` must be an integer HTTP code from 200 through 599, and `body` a JSON
 object containing only finite JSON values, string keys, at most 32 levels of
 nesting, and at most 64 KiB encoded as UTF-8.
