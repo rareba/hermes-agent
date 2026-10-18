@@ -40,13 +40,15 @@ def _json_value(value, depth=0):
         raise ValueError("Plugin response contains non-JSON values")
 
 
-async def dispatch_plugin_hook(hook: str, *, route_name: str, profile: str, payload,
+async def dispatch_plugin_hook(hook: str, *, route_name: str, profile: str | None, payload,
                                delivery_id: str):
     """No observer-style error swallowing: only the single consumer can acknowledge receipt."""
     from aiohttp import web
     from hermes_cli.plugins import _delivery_manager
+    from hermes_cli.profiles import get_active_profile_name
 
     try:
+        profile = profile or get_active_profile_name()
         callbacks = tuple(_delivery_manager().iter_hook_callbacks(hook))
         if len(callbacks) != 1 or not inspect.iscoroutinefunction(callbacks[0]):
             raise ValueError("Webhook plugin hook requires exactly one async callback")
