@@ -453,6 +453,18 @@ class TestTeamsMessageHandling:
         assert event.source.chat_type == "dm"
 
     @pytest.mark.anyio
+    @pytest.mark.parametrize("reply_to", [None, "approval-message-123"])
+    async def test_native_reply_target_preserved(self, reply_to):
+        adapter = TeamsAdapter(_make_config(
+            client_id="bot-id", client_secret="secret", tenant_id="tenant"))
+        adapter.handle_message = AsyncMock()
+        activity = self._make_activity()
+        activity.reply_to_id = reply_to
+        await adapter._on_message(self._make_ctx(activity))
+        event = adapter.handle_message.call_args[0][0]
+        assert event.reply_to_message_id == reply_to
+
+    @pytest.mark.anyio
     async def test_group_message_creates_group_event(self):
         adapter = TeamsAdapter(_make_config(
             client_id="bot-id", client_secret="secret", tenant_id="tenant",
